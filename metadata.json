@@ -1,0 +1,6 @@
+{
+  "name": "ChronosIST - World Timezone to IST Alarm & Alert Manager",
+  "description": "Convert times from any global timezone to Indian Standard Time (IST) with live countdowns, customizable audio alerts, and automated browser notifications when calculated IST times arrive.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
