@@ -31,56 +31,31 @@ jobs:
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Build Web App & Prepare Cordova Project
+      - name: Build Vite React App & Prepare Cordova Project
         run: |
+          # 1. Install dependencies bypassing the esbuild peer conflict
+          npm install --legacy-peer-deps
+          
+          # 2. Build the Vite app with relative base paths
+          npx vite build --base=./
+          
+          # 3. Create Cordova wrapper and copy compiled dist/ files
           npm install -g cordova
           cordova create sk_alert_app com.sk.alert "SK Alert"
           rm -rf sk_alert_app/www/*
-
-          # Check if this is a React / Vite / Node project that needs building
-          if [ -f "package.json" ] && jq -e '.scripts.build' package.json > /dev/null; then
-            echo "Detected package.json build script. Building project..."
-            npm install
-            # Pass --base=./ for Vite projects so assets load in Cordova file:// protocol
-            npm run build -- --base=./ || npm run build
-            
-            if [ -d "dist" ]; then
-              cp -r dist/* sk_alert_app/www/
-            elif [ -d "build" ]; then
-              cp -r build/* sk_alert_app/www/
-            else
-              rsync -av --exclude='sk_alert_app' --exclude='node_modules' --exclude='.git' --exclude='.github' ./ sk_alert_app/www/
-            fi
-          else
-            echo "Plain HTML/JS repo detected. Copying files..."
-            rsync -av --exclude='sk_alert_app' --exclude='.git' --exclude='.github' ./ sk_alert_app/www/
-          fi
-
-          # Fix 1: If index.html is missing at root of www, find the first .html file and copy it to index.html
-          if [ ! -f "sk_alert_app/www/index.html" ]; then
-            FIRST_HTML=$(find sk_alert_app/www -maxdepth 2 -name "*.html" | head -n 1)
-            if [ -n "$FIRST_HTML" ]; then
-              echo "Renaming $FIRST_HTML to sk_alert_app/www/index.html"
-              cp "$FIRST_HTML" sk_alert_app/www/index.html
-            fi
-          fi
-
-          # Fix 2: Convert absolute asset paths (/assets/ or /static/) to relative paths (./assets/)
-          if [ -f "sk_alert_app/www/index.html" ]; then
-            sed -i 's|src="/|src="./|g' sk_alert_app/www/index.html
-            sed -i 's|href="/|href="./|g' sk_alert_app/www/index.html
-            # Remove strict Content-Security-Policy meta tags that block external CDNs/APIs
-            sed -i 's|http-equiv="Content-Security-Policy"|http-equiv="X-Disabled-CSP"|g' sk_alert_app/www/index.html
-          fi
-
-          echo "Final files in www/:"
+          cp -r dist/* sk_alert_app/www/
+          
+          # 4. Strip 'crossorigin' attribute so Android WebView loads scripts cleanly
+          sed -i 's/ crossorigin//g' sk_alert_app/www/index.html
+          
+          echo "Compiled files inside sk_alert_app/www/:"
           ls -la sk_alert_app/www/
 
-      - name: Unlock Network & Cleartext Traffic in config.xml
+      - name: Configure Cordova WebView for Vite ES Modules
         working-directory: ./sk_alert_app
         run: |
-          # Allow external scripts, CDNs, and HTTP/HTTPS API calls
-          sed -i 's|</widget>|  <allow-navigation href="*" />\n  <access origin="*" />\n  <preference name="AndroidInsecureFileModeEnabled" value="true" />\n</widget>|g' config.xml
+          # Enable https scheme & cleartext so Vite ES modules, React Router, and APIs work seamlessly
+          sed -i 's|</widget>|  <allow-navigation href="*" />\n  <access origin="*" />\n  <preference name="scheme" value="https" />\n  <preference name="hostname" value="localhost" />\n  <preference name="AndroidInsecureFileModeEnabled" value="true" />\n</widget>|g' config.xml
 
       - name: Build Android APK
         working-directory: ./sk_alert_app
