@@ -30,7 +30,9 @@ import {
   requestNotificationPermission,
   getNotificationPermissionStatus,
   triggerSystemNotification,
-  sendTestNotificationToDevice
+  sendTestNotificationToDevice,
+  scheduleNativeDeviceAlarm,
+  cancelNativeDeviceAlarm
 } from './utils/notifications';
 
 import { Header } from './components/Header';
@@ -77,14 +79,40 @@ export default function App() {
   // Notification status
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
 
-  // Check notification permission on mount
+  // Check notification permission on mount and when returning to app (after granting system prompt)
   useEffect(() => {
-    setNotificationPermission(getNotificationPermissionStatus());
+    const refreshPermission = () => {
+      setNotificationPermission(getNotificationPermissionStatus());
+    };
+
+    refreshPermission();
+    window.addEventListener('focus', refreshPermission);
+    document.addEventListener('visibilitychange', refreshPermission);
+
+    return () => {
+      window.removeEventListener('focus', refreshPermission);
+      document.removeEventListener('visibilitychange', refreshPermission);
+    };
   }, []);
 
-  // Sync alarms to localStorage
+  // Sync alarms to localStorage & Android Native AlarmManager
   useEffect(() => {
     saveAlarmsToStorage(alarms);
+
+    // Sync enabled alarms to hardware AlarmManager (so device wakes even when locked)
+    const now = new Date();
+    alarms.forEach(alarm => {
+      const numericId = Math.abs(alarm.id.split('').reduce((acc, char) => (acc << 5) - acc + char.charCodeAt(0), 0)) % 1000000;
+      if (!alarm.enabled) {
+        cancelNativeDeviceAlarm(numericId);
+        return;
+      }
+      const info = calculateNextTrigger(alarm, now);
+      if (info && info.nextTriggerMs > now.getTime()) {
+        const bodyText = `Time arrived in IST: ${info.istTimeString} (${alarm.sourceTime} in ${alarm.sourceCityLabel})${alarm.matchLabel ? ` · ${alarm.matchLabel}` : ''}`;
+        scheduleNativeDeviceAlarm(numericId, `⏰ ${alarm.title}`, bodyText, info.nextTriggerMs);
+      }
+    });
   }, [alarms]);
 
   // Sync settings to localStorage
@@ -225,17 +253,21 @@ export default function App() {
 
   const [notificationTestStatus, setNotificationTestStatus] = useState<string | null>(null);
 
-  // Request browser notifications & activate Android notification channel
+  // Request browser/native notifications & activate Android notification channel
   const handleRequestNotifications = async () => {
     const perm = await requestNotificationPermission();
-    setNotificationPermission(perm);
-    if (perm === 'granted') {
+    const updated = getNotificationPermissionStatus();
+    setNotificationPermission(updated !== 'default' ? updated : perm);
+    if (updated === 'granted' || perm === 'granted') {
       await triggerSystemNotification(
         '🔔 SK Alert Activated',
         'IST Alarms are now connected to your device status bar and floating alerts.',
         'sk-alert-activation'
       );
       setNotificationTestStatus('Phone notifications activated! Test signal delivered.');
+      setTimeout(() => setNotificationTestStatus(null), 6000);
+    } else {
+      setNotificationTestStatus('Notification prompt requested. Please tap Allow on the device dialog.');
       setTimeout(() => setNotificationTestStatus(null), 6000);
     }
   };

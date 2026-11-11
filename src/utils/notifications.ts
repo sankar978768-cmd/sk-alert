@@ -1,6 +1,55 @@
 /**
- * Web Browser Notifications, Android Service Worker & Vibration Helpers
+ * Multi-Platform Notification Subsystem for SK Alert.
+ * Supports:
+ * 1. Native Android APK Bridge (window.AndroidNotificationBridge) via Android NotificationManager & AlarmManager
+ * 2. Mobile Browser / PWA Service Worker (ServiceWorkerRegistration.showNotification)
+ * 3. Desktop Web Notifications API
  */
+
+interface AndroidBridge {
+  hasPermission: () => boolean;
+  requestPermission: () => void;
+  postNotification: (title: string, message: string, tag: string) => boolean;
+  vibrate: (milliseconds: number) => void;
+  scheduleAlarm: (id: number, title: string, message: string, triggerAtMillis: number) => boolean;
+  cancelAlarm: (id: number) => void;
+}
+
+function getAndroidBridge(): AndroidBridge | null {
+  if (typeof window !== 'undefined' && (window as unknown as { AndroidNotificationBridge?: AndroidBridge }).AndroidNotificationBridge) {
+    return (window as unknown as { AndroidNotificationBridge: AndroidBridge }).AndroidNotificationBridge;
+  }
+  return null;
+}
+
+// Polyfill window.Notification for Android WebView if native bridge exists
+if (typeof window !== 'undefined') {
+  const bridge = getAndroidBridge();
+  if (bridge && typeof window.Notification === 'undefined') {
+    const activeBridge = bridge;
+    // Inject polyfill so all standard web checks pass cleanly inside Android WebView
+    (window as unknown as { Notification: unknown }).Notification = class AndroidNotificationPolyfill {
+      static get permission(): NotificationPermission {
+        try {
+          return activeBridge.hasPermission() ? 'granted' : 'default';
+        } catch {
+          return 'granted';
+        }
+      }
+      static requestPermission(): Promise<NotificationPermission> {
+        try {
+          activeBridge.requestPermission();
+          return Promise.resolve(activeBridge.hasPermission() ? 'granted' : 'default');
+        } catch {
+          return Promise.resolve('granted');
+        }
+      }
+      constructor(title: string, options?: NotificationOptions) {
+        activeBridge.postNotification(title, options?.body || '', options?.tag || 'sk-alert');
+      }
+    };
+  }
+}
 
 let swRegistrationPromise: Promise<ServiceWorkerRegistration | null> | null = null;
 
@@ -25,7 +74,7 @@ export async function getOrRegisterServiceWorker(): Promise<ServiceWorkerRegistr
   return swRegistrationPromise;
 }
 
-// Automatically register SW on module load in client context
+// Automatically register SW on load in client context
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     getOrRegisterServiceWorker().catch(() => {});
@@ -33,16 +82,52 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
 }
 
 /**
+ * Check current notification permission across Native Android & Web
+ */
+export function getNotificationPermissionStatus(): NotificationPermission {
+  const bridge = getAndroidBridge();
+  if (bridge) {
+    try {
+      return bridge.hasPermission() ? 'granted' : 'default';
+    } catch {
+      return 'granted';
+    }
+  }
+
+  if (typeof window === 'undefined' || !('Notification' in window)) {
+    return 'default';
+  }
+  return Notification.permission;
+}
+
+/**
  * Request notification permissions and activate Android notification channel
  */
 export async function requestNotificationPermission(): Promise<NotificationPermission> {
+  const bridge = getAndroidBridge();
+  if (bridge) {
+    try {
+      bridge.requestPermission();
+      // Send activation test signal immediately
+      bridge.postNotification(
+        '🔔 SK Alert Notifications Active',
+        'IST Alarms and time alerts are now enabled on this device.',
+        'sk-alert-activation'
+      );
+      return bridge.hasPermission() ? 'granted' : 'default';
+    } catch (err) {
+      console.warn('Native bridge requestPermission error:', err);
+      return 'granted';
+    }
+  }
+
   if (typeof window === 'undefined' || !('Notification' in window)) {
     return 'denied';
   }
 
   try {
     // 1. Ensure service worker is registered
-    const reg = await getOrRegisterServiceWorker();
+    await getOrRegisterServiceWorker();
 
     // 2. Request browser permission
     const permission = await Notification.requestPermission();
@@ -63,17 +148,10 @@ export async function requestNotificationPermission(): Promise<NotificationPermi
   }
 }
 
-export function getNotificationPermissionStatus(): NotificationPermission {
-  if (typeof window === 'undefined' || !('Notification' in window)) {
-    return 'denied';
-  }
-  return Notification.permission;
-}
-
 /**
  * Triggers a system notification.
- * On Android / mobile browsers, it uses ServiceWorkerRegistration.showNotification()
- * which is REQUIRED by Android to show notifications and enable system settings.
+ * Dispatches via Native Android Bridge when running as APK,
+ * or ServiceWorker / Web Notifications when running on Web / PWA.
  */
 export async function triggerSystemNotification(
   title: string,
@@ -82,7 +160,18 @@ export async function triggerSystemNotification(
 ): Promise<boolean> {
   if (typeof window === 'undefined') return false;
 
-  // 1. Mobile Hardware Vibration
+  // 1. Check Native Android Bridge first (For Cordova APK)
+  const bridge = getAndroidBridge();
+  if (bridge) {
+    try {
+      bridge.vibrate(800);
+      return bridge.postNotification(title, body, tag);
+    } catch (bridgeErr) {
+      console.warn('Native bridge postNotification error:', bridgeErr);
+    }
+  }
+
+  // 2. Mobile Hardware Vibration
   if ('vibrate' in navigator) {
     try {
       navigator.vibrate([400, 200, 400, 200, 800]);
@@ -91,7 +180,7 @@ export async function triggerSystemNotification(
     }
   }
 
-  // 2. Check permission
+  // 3. Check Web permission
   if (!('Notification' in window) || Notification.permission !== 'granted') {
     return false;
   }
@@ -106,7 +195,7 @@ export async function triggerSystemNotification(
     data: { url: window.location.href }
   };
 
-  // 3. Try Service Worker first (Required on Android PWA & Chrome Android)
+  // 4. Try Service Worker first (Required on Android PWA & Chrome Android)
   if ('serviceWorker' in navigator) {
     try {
       const reg = await getOrRegisterServiceWorker();
@@ -119,7 +208,7 @@ export async function triggerSystemNotification(
     }
   }
 
-  // 4. Desktop window.Notification fallback
+  // 5. Desktop window.Notification fallback
   try {
     const notification = new Notification(title, notificationOptions);
     notification.onclick = () => {
@@ -134,9 +223,56 @@ export async function triggerSystemNotification(
 }
 
 /**
+ * Schedule hardware AlarmManager alarm when running in Android APK
+ */
+export function scheduleNativeDeviceAlarm(id: number, title: string, message: string, triggerAtMillis: number): boolean {
+  const bridge = getAndroidBridge();
+  if (bridge) {
+    try {
+      return bridge.scheduleAlarm(id, title, message, triggerAtMillis);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Cancel hardware AlarmManager alarm when running in Android APK
+ */
+export function cancelNativeDeviceAlarm(id: number): void {
+  const bridge = getAndroidBridge();
+  if (bridge) {
+    try {
+      bridge.cancelAlarm(id);
+    } catch {
+      // Ignore
+    }
+  }
+}
+
+/**
  * Dedicated test function to send a real sample alert to the user's Android phone
  */
 export async function sendTestNotificationToDevice(): Promise<{ success: boolean; message: string }> {
+  const bridge = getAndroidBridge();
+  if (bridge) {
+    try {
+      bridge.requestPermission();
+      const ok = bridge.postNotification(
+        '⏰ SK Alert: Test Notification',
+        'Test signal received! Alarms and IST notifications will sound and pop up on your phone.',
+        'test-alert'
+      );
+      return {
+        success: ok,
+        message: 'Native test notification sent to your Android status bar and lock screen!'
+      };
+    } catch (err) {
+      return { success: false, message: `Native error: ${String(err)}` };
+    }
+  }
+
   if (typeof window === 'undefined' || !('Notification' in window)) {
     return { success: false, message: 'Notifications are not supported on this device/browser.' };
   }

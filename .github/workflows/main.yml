@@ -54,13 +54,22 @@ jobs:
       - name: Configure Cordova WebView for Vite ES Modules
         working-directory: ./sk_alert_app
         run: |
-          # Enable https scheme & cleartext so Vite ES modules, React Router, and APIs work seamlessly
-          sed -i 's|</widget>|  <allow-navigation href="*" />\n  <access origin="*" />\n  <preference name="scheme" value="https" />\n  <preference name="hostname" value="localhost" />\n  <preference name="AndroidInsecureFileModeEnabled" value="true" />\n</widget>|g' config.xml
+          # Enable https scheme, keep-running in background & cleartext so Vite ES modules, APIs and alarms work seamlessly
+          sed -i 's|</widget>|  <allow-navigation href="*" />\n  <access origin="*" />\n  <preference name="scheme" value="https" />\n  <preference name="hostname" value="localhost" />\n  <preference name="AndroidInsecureFileModeEnabled" value="true" />\n  <preference name="KeepRunning" value="true" />\n</widget>|g' config.xml
 
       - name: Build Android APK
         working-directory: ./sk_alert_app
         run: |
           cordova platform add android@13.0.0
+
+          # Copy Native Notification Bridge and Background Alarm Receiver into Android App
+          cp ../android-bridge/MainActivity.java platforms/android/app/src/main/java/com/sk/alert/MainActivity.java
+          cp ../android-bridge/NotificationBridge.java platforms/android/app/src/main/java/com/sk/alert/NotificationBridge.java
+          cp ../android-bridge/NotificationReceiver.java platforms/android/app/src/main/java/com/sk/alert/NotificationReceiver.java
+
+          # Patch AndroidManifest.xml with POST_NOTIFICATIONS, VIBRATE, WAKE_LOCK, and Alarm Receiver
+          node ../android-bridge/patch-manifest.js platforms/android/app/src/main/AndroidManifest.xml
+
           cordova build android --debug -- --gradleArg=-PcdvMinSdkVersion=24
 
       - name: Prepare APK Artifact
