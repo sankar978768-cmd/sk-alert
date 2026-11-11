@@ -89,15 +89,24 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Zone 3: 1 Primary Action + Quick Controls */}
         <div className="flex items-center gap-2.5 shrink-0">
-          {notificationPermission !== 'granted' && (
+          {notificationPermission !== 'granted' ? (
             <button
               onClick={onRequestNotifications}
-              title="Enable browser notifications"
-              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-amber-300 bg-amber-950/40 border border-amber-800/50 rounded-lg hover:bg-amber-900/40 transition-colors whitespace-nowrap shrink-0"
+              title="Allow notifications on this device"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-amber-300 bg-amber-500/20 border border-amber-500/40 rounded-lg hover:bg-amber-500/30 transition-colors whitespace-nowrap shrink-0 cursor-pointer animate-pulse"
             >
               <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
-              <span>Enable Browser Alerts</span>
+              <span className="hidden sm:inline">Allow Phone Alerts</span>
+              <span className="sm:hidden">Alerts</span>
             </button>
+          ) : (
+            <span
+              title="Notifications active on this device"
+              className="hidden lg:flex items-center gap-1 text-[11px] text-emerald-400 font-medium px-2 py-1 rounded bg-emerald-500/10 border border-emerald-500/20"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              <span>Alerts Active</span>
+            </span>
           )}
 
           <button

@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "name": "SK Alert - World Timezone to IST Alarm",
+  "short_name": "SK Alert",
+  "description": "Convert foreign timezone times to Indian Standard Time (IST) with live countdowns, sound alerts, and mobile notifications.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#020617",
+  "theme_color": "#020617",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

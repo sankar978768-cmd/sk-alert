@@ -29,7 +29,8 @@ import { startAlarmLoop, stopAlarmLoop, playTonePattern } from './utils/audio';
 import {
   requestNotificationPermission,
   getNotificationPermissionStatus,
-  triggerSystemNotification
+  triggerSystemNotification,
+  sendTestNotificationToDevice
 } from './utils/notifications';
 
 import { Header } from './components/Header';
@@ -91,59 +92,48 @@ export default function App() {
     saveSettingsToStorage(settings);
   }, [settings]);
 
-  // Main 1-second clock loop & alarm monitor
+  // Unlock mobile Web Audio context on first user tap/click
   useEffect(() => {
-    const timer = setInterval(() => {
-      const now = new Date();
-      setCurrentTime(now);
+    const unlock = () => {
+      playTonePattern('droplet', 0.001);
+    };
+    window.addEventListener('touchstart', unlock, { once: true, passive: true });
+    window.addEventListener('click', unlock, { once: true, passive: true });
+    return () => {
+      window.removeEventListener('touchstart', unlock);
+      window.removeEventListener('click', unlock);
+    };
+  }, []);
 
-      // Check all enabled alarms
-      alarms.forEach(alarm => {
-        if (!alarm.enabled) return;
-
-        const info = calculateNextTrigger(alarm, now);
-        if (!info) return;
-
-        // Check if trigger time is reached (within 2 seconds tolerance) and hasn't been triggered in the last 60 seconds
-        const diffMs = info.nextTriggerMs - now.getTime();
-        const hasTriggeredRecently = alarm.lastTriggeredAt && now.getTime() - alarm.lastTriggeredAt < 60000;
-
-        if (diffMs <= 1000 && diffMs >= -2500 && !hasTriggeredRecently) {
-          // Trigger the alarm!
-          triggerAlarm(alarm, info);
-        }
-      });
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [alarms, settings]);
-
-  // Trigger an alarm (sound + modal + browser notification)
+  // Trigger an alarm (sound + modal + mobile service worker notification + vibration)
   const triggerAlarm = useCallback(
     (alarm: Alarm, info: NextTriggerInfo) => {
-      // 1. Play sound loop if audio enabled
+      // 1. Flash document title for backgrounded tabs
+      document.title = `🚨 ${alarm.title} - IST ALARM RINGING!`;
+
+      // 2. Play sound loop if audio enabled
       if (settings.enableAudio) {
         startAlarmLoop(alarm.sound || settings.sound, settings.volume);
       }
 
-      // Android / Mobile vibration feedback pattern: 400ms on, 200ms off, 400ms on
+      // 3. Android / Mobile hardware vibration feedback
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
         try {
           navigator.vibrate([400, 200, 400, 200, 800]);
         } catch {
-          // Vibration not supported or gesture policy blocked
+          // Vibration blocked by device policy
         }
       }
 
-      // 2. Open active ringing overlay
+      // 4. Open active in-app ringing overlay
       setRingingAlarm(alarm);
       setRingingTriggerInfo(info);
 
-      // 3. Trigger browser push notification
-      const bodyText = `Time arrived in IST: ${info.istTimeString} (${alarm.sourceTime} in ${alarm.sourceCityLabel})`;
+      // 5. Trigger browser/Android system notification via Service Worker
+      const bodyText = `Time arrived in IST: ${info.istTimeString} (${alarm.sourceTime} in ${alarm.sourceCityLabel})${alarm.matchLabel ? ` · ${alarm.matchLabel}` : ''}`;
       triggerSystemNotification(`⏰ ${alarm.title}`, bodyText);
 
-      // 4. Update alarm's lastTriggeredAt
+      // 6. Update alarm's lastTriggeredAt
       setAlarms(prev =>
         prev.map(a => {
           if (a.id === alarm.id) {
@@ -162,9 +152,56 @@ export default function App() {
     [settings]
   );
 
+  // Main 1-second clock loop & alarm monitor with mobile wake support
+  useEffect(() => {
+    const checkAlarms = () => {
+      const now = new Date();
+      setCurrentTime(now);
+
+      // Check all enabled alarms
+      alarms.forEach(alarm => {
+        if (!alarm.enabled) return;
+
+        // Grace window of 30 seconds ensures alarms are never missed if screen dimmed
+        const info = calculateNextTrigger(alarm, now, 30000);
+        if (!info) return;
+
+        // Check if trigger time is reached:
+        // Diff within 1000ms ahead or up to 30000ms past, avoiding multiple triggers within 60s
+        const diffMs = info.nextTriggerMs - now.getTime();
+        const hasTriggeredRecently = alarm.lastTriggeredAt && now.getTime() - alarm.lastTriggeredAt < 60000;
+
+        if (diffMs <= 1000 && diffMs >= -30000 && !hasTriggeredRecently) {
+          triggerAlarm(alarm, info);
+        }
+      });
+    };
+
+    // Run check immediately
+    checkAlarms();
+
+    const timer = setInterval(checkAlarms, 1000);
+
+    // Recheck immediately when user returns to tab or unlocks phone
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkAlarms();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', checkAlarms);
+
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', checkAlarms);
+    };
+  }, [alarms, triggerAlarm]);
+
   // Dismiss ringing alarm
   const handleDismissAlarm = useCallback(() => {
     stopAlarmLoop();
+    document.title = 'ChronosIST - World Timezone to IST Alarm & Alert Manager';
     setRingingAlarm(null);
     setRingingTriggerInfo(null);
   }, []);
@@ -186,10 +223,29 @@ export default function App() {
     [ringingAlarm]
   );
 
-  // Request browser notifications
+  const [notificationTestStatus, setNotificationTestStatus] = useState<string | null>(null);
+
+  // Request browser notifications & activate Android notification channel
   const handleRequestNotifications = async () => {
     const perm = await requestNotificationPermission();
     setNotificationPermission(perm);
+    if (perm === 'granted') {
+      await triggerSystemNotification(
+        '🔔 SK Alert Activated',
+        'IST Alarms are now connected to your device status bar and floating alerts.',
+        'sk-alert-activation'
+      );
+      setNotificationTestStatus('Phone notifications activated! Test signal delivered.');
+      setTimeout(() => setNotificationTestStatus(null), 6000);
+    }
+  };
+
+  // Send a test signal to Android phone to verify status bar & sound
+  const handleSendTestNotification = async () => {
+    setNotificationTestStatus('Sending test signal to your device...');
+    const result = await sendTestNotificationToDevice();
+    setNotificationTestStatus(result.message);
+    setTimeout(() => setNotificationTestStatus(null), 6000);
   };
 
   // Toggle alarm enabled/disabled
@@ -442,6 +498,74 @@ export default function App() {
                   </button>
                 </div>
               </div>
+            </div>
+
+            {/* Android Device Alerts Activation & Test Signal Banner */}
+            <div className={`p-4 rounded-2xl border transition-all ${
+              notificationPermission === 'granted'
+                ? 'bg-slate-900/90 border-emerald-900/40 text-slate-200 shadow-md'
+                : 'bg-gradient-to-r from-amber-950/40 to-slate-900 border-amber-500/40 text-amber-200 shadow-lg'
+            }`}>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className={`p-2 rounded-xl shrink-0 mt-0.5 ${
+                    notificationPermission === 'granted' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-400/10 text-amber-400'
+                  }`}>
+                    {notificationPermission === 'granted' ? (
+                      <CheckCircle className="w-5 h-5" />
+                    ) : (
+                      <ShieldAlert className="w-5 h-5 animate-pulse" />
+                    )}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-sm text-white">
+                        {notificationPermission === 'granted'
+                          ? 'Phone & Android Status Bar Alerts: Connected'
+                          : 'Activate Android Phone Notifications (SK Alert)'}
+                      </span>
+                      {notificationPermission === 'granted' && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                          Active
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {notificationPermission === 'granted'
+                        ? 'Alarms trigger floating alerts, system sound, vibration, and IST notifications even when the screen is locked.'
+                        : 'Required to unlock Android notification toggles, sound, vibration, and floating banner alerts.'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                  {notificationPermission !== 'granted' ? (
+                    <button
+                      onClick={handleRequestNotifications}
+                      className="px-4 py-2 text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl transition-all shadow-md active:scale-95 cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Bell className="w-3.5 h-3.5" />
+                      <span>Enable Android Alerts</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleSendTestNotification}
+                      className="px-3.5 py-2 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 rounded-xl transition-all active:scale-95 cursor-pointer flex items-center gap-1.5"
+                      title="Send instant notification to test Android sound, vibration and status bar"
+                    >
+                      <Bell className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Send Test Signal to Phone</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {notificationTestStatus && (
+                <div className="mt-3 pt-2.5 border-t border-slate-800 flex items-center gap-2 text-xs text-amber-300">
+                  <div className="w-2 h-2 rounded-full bg-amber-400 animate-ping shrink-0" />
+                  <span>{notificationTestStatus}</span>
+                </div>
+              )}
             </div>
 
             {/* Quick Paste: Time + Location Name -> Detect, Convert to IST & Set Alarm */}

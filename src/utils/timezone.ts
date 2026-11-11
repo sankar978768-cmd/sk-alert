@@ -351,7 +351,11 @@ export function getLocalComponentsInTz(date: Date, timeZone: string) {
  * - Snoozed until
  * - Lead time (pre-alarm)
  */
-export function calculateNextTrigger(alarm: Alarm, now: Date = new Date()): NextTriggerInfo | null {
+export function calculateNextTrigger(
+  alarm: Alarm,
+  now: Date = new Date(),
+  gracePeriodMs: number = 30000
+): NextTriggerInfo | null {
   const timeParts = alarm.sourceTime.split(':').map(Number);
   const targetHour = timeParts[0] || 0;
   const targetMinute = timeParts[1] || 0;
@@ -359,8 +363,8 @@ export function calculateNextTrigger(alarm: Alarm, now: Date = new Date()): Next
   const hasSeconds = timeParts.length >= 3;
   const nowMs = now.getTime();
 
-  // If currently snoozed and snooze time is in future:
-  if (alarm.snoozedUntil && alarm.snoozedUntil > nowMs) {
+  // If currently snoozed and snooze time is in future or within grace window:
+  if (alarm.snoozedUntil && alarm.snoozedUntil >= nowMs - gracePeriodMs) {
     const triggerDate = new Date(alarm.snoozedUntil);
     return {
       alarmId: alarm.id,
@@ -369,7 +373,7 @@ export function calculateNextTrigger(alarm: Alarm, now: Date = new Date()): Next
       istDateString: formatInIST(triggerDate, { includeSeconds: hasSeconds }),
       sourceTimeString: formatInTimeZone(triggerDate, alarm.sourceTimeZone, { timeFormat: '12h', includeSeconds: hasSeconds, includeDate: false, includeWeekday: false }),
       sourceDateString: formatInTimeZone(triggerDate, alarm.sourceTimeZone, { includeTzName: true }),
-      timeRemainingMs: alarm.snoozedUntil - nowMs,
+      timeRemainingMs: Math.max(0, alarm.snoozedUntil - nowMs),
       isPreAlert: false,
       leadTimeSeconds: 0,
       leadSummary: undefined,
@@ -397,7 +401,8 @@ export function calculateNextTrigger(alarm: Alarm, now: Date = new Date()): Next
     const fullTargetDate = convertSourceTimeToDate(y, m, d, targetHour, targetMinute, alarm.sourceTimeZone, targetSecond);
     const triggerMs = fullTargetDate.getTime() - leadMs;
 
-    if (triggerMs > nowMs) {
+    // Allow trigger time if in future or within active arrival grace window
+    if (triggerMs >= nowMs - gracePeriodMs) {
       targetDate = fullTargetDate;
     } else {
       // Past once alarm
@@ -437,7 +442,8 @@ export function calculateNextTrigger(alarm: Alarm, now: Date = new Date()): Next
         );
 
         const candidateTriggerMs = candidateFullDate.getTime() - leadMs;
-        if (candidateTriggerMs > nowMs) {
+        // If upcoming or within grace window of current moment
+        if (candidateTriggerMs >= nowMs - gracePeriodMs) {
           targetDate = candidateFullDate;
           break;
         }

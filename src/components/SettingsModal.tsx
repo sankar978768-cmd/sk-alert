@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, Volume2, Bell, Clock, ShieldCheck, Download, Upload, Play, Sparkles } from 'lucide-react';
 import { AppSettings, SoundType, Alarm } from '../types';
 import { playTonePattern, SOUND_OPTIONS } from '../utils/audio';
+import { sendTestNotificationToDevice } from '../utils/notifications';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -127,12 +128,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">
               Browser Web Notifications
             </label>
-            <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-800/80 border border-slate-700">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 rounded-xl bg-slate-800/80 border border-slate-700 gap-3">
               <div className="flex items-center gap-2.5">
-                <Bell className="w-5 h-5 text-amber-400" />
+                <Bell className="w-5 h-5 text-amber-400 shrink-0" />
                 <div>
                   <div className="text-sm font-semibold text-white">
-                    Desktop / Mobile Push Alerts
+                    Android & Mobile System Alerts
                   </div>
                   <div className="text-xs text-slate-400">
                     Status:{' '}
@@ -145,20 +146,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           : 'text-amber-400'
                       }`}
                     >
-                      {notificationPermission.toUpperCase()}
+                      {notificationPermission === 'granted' ? 'CONNECTED (Active)' : notificationPermission.toUpperCase()}
                     </span>
                   </div>
                 </div>
               </div>
 
-              {notificationPermission !== 'granted' && (
-                <button
-                  onClick={onRequestNotifications}
-                  className="px-3 py-1.5 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg transition-colors cursor-pointer"
-                >
-                  Enable
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {notificationPermission !== 'granted' ? (
+                  <button
+                    onClick={onRequestNotifications}
+                    className="px-3.5 py-1.5 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg transition-colors cursor-pointer"
+                  >
+                    Enable Alerts
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const res = await sendTestNotificationToDevice();
+                      alert(res.message);
+                    }}
+                    className="px-3 py-1.5 text-xs font-semibold text-emerald-300 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Bell className="w-3.5 h-3.5" />
+                    <span>Send Test Signal to Phone</span>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
