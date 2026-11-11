@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout Repository
@@ -16,38 +16,35 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Install Gradle & Configure Pre-installed Android SDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gradle rsync
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Install Gradle
-        uses: gradle/actions/setup-gradle@v3
-
-      - name: Install Cordova & Create Project
+      - name: Create Cordova Project & Copy Files
         run: |
           npm install -g cordova
           cordova create sk_alert_app com.sk.alert "SK Alert"
-          
-          # Clear default template files and copy your repo's web files into www/
           rm -rf sk_alert_app/www/*
-          
-          # If your index.html is in the root, copy everything except build folder & git
           rsync -av --exclude='sk_alert_app' --exclude='.git' --exclude='.github' ./ sk_alert_app/www/
 
       - name: Build Android APK
         working-directory: ./sk_alert_app
         run: |
-          cordova platform add android
-          cordova build android --debug
+          cordova platform add android@13.0.0
+          cordova build android --debug -- --gradleArg=-PcdvMinSdkVersion=24
 
-      - name: Rename and Prepare APK
+      - name: Prepare APK Artifact
         run: |
           cp sk_alert_app/platforms/android/app/build/outputs/apk/debug/app-debug.apk ./SK-Alert.apk
 
@@ -56,3 +53,4 @@ jobs:
         with:
           name: SK-Alert-APK
           path: ./SK-Alert.apk
+          
